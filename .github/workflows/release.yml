@@ -1,65 +1,54 @@
-name: release
+name: Build and Push Docker Image
 on:
   push:
     tags:
       - '*'
 jobs:
-  release:
-    name: Release with Go ${{ matrix.go-version }}
-    environment: release
+  build-and-push:
+    name: Build and push Docker image to GitHub Container Registry
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        go-version: [1.25.7]
+    permissions:
+      contents: read
+      packages: write
     steps:
-      - name: Install Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: ${{ matrix.go-version }}
-
-      - uses: bufbuild/buf-setup-action@v1
-        with:
-          version: "1.34.0"
-
       - name: Checkout code
         uses: actions/checkout@v5
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
-          platforms: all
+          platforms: linux/amd64,linux/arm64
 
       - name: Set up Docker buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to Docker Hub
+      - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build DEB and RPM packages
-        run: misc/scripts/release_package.sh
-        env:
-          STATS_ENDPOINT: ${{ secrets.STATS_ENDPOINT }}
-          STATS_TOKEN: ${{ secrets.STATS_TOKEN }}
-
-      - name: Release on Github
-        uses: goreleaser/goreleaser-action@v5
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
         with:
-          version: latest
-          args: release --rm-dist --release-notes=misc/release/notes.md
-        env:
-          # note custom secret here since we need access to Centrifugo Homebrew repo.
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
-          STATS_ENDPOINT: ${{ secrets.STATS_ENDPOINT }}
-          STATS_TOKEN: ${{ secrets.STATS_TOKEN }}
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha
+            latest
 
-      - name: Release on Packagecloud
-        env:
-          PACKAGECLOUD_TOKEN: ${{ secrets.PACKAGECLOUD_TOKEN }}
-        run: misc/scripts/release_packagecloud.sh
-
-      - uses: bufbuild/buf-push-action@v1
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
         with:
-          buf_token: ${{ secrets.BUF_TOKEN }}
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
